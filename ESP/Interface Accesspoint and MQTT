@@ -1,0 +1,482 @@
+/*
+ Basic ESP8266 MQTT example
+
+ This sketch demonstrates the capabilities of the pubsub library in combination
+ with the ESP8266 board/library.
+
+ It connects to an MQTT server then:
+  - publishes "hello world" to the topic "outTopic" every two seconds
+  - subscribes to the topic "inTopic", printing out any messages
+    it receives. NB - it assumes the received payloads are strings not binary
+  - If the first character of the topic "inTopic" is an 1, switch ON the ESP Led,
+    else switch it off
+
+ It will reconnect to the server if the connection is lost using a blocking
+ reconnect function. See the 'mqtt_reconnect_nonblocking' example for how to
+ achieve the same result without blocking the main loop.
+
+ To install the ESP8266 board, (using Arduino 1.6.4+):
+  - Add the following 3rd party board manager under "File -> Preferences -> Additional Boards Manager URLs":
+       http://arduino.esp8266.com/stable/package_esp8266com_index.json
+  - Open the "Tools -> Board -> Board Manager" and click install for the ESP8266"
+  - Select your ESP8266 in "Tools -> Board"
+
+*/
+
+#include <ESP8266HTTPClient.h>
+#include <NTPClient.h>
+#include <ESP8266WebServer.h>
+#include <EEPROM.h>
+#include <ESP8266mDNS.h>
+#include <SoftwareSerial.h>
+#include <ESP8266WiFi.h>
+#include <PubSubClient.h>
+#include <WiFiUdp.h>
+#define seconds() (millis()/1000)
+bool process = false;
+SoftwareSerial ss(5, 4);//RX,TX
+// Update these with values suitable for your network.
+#define pushbutton 2
+bool prevRelayState[9] =  {true, true, true, true, true, true};
+#define Buttonlight 12
+const char* ssid = "DotKato_2.4"; // Enter your WiFi name
+const char* password =  "DotKato123"; // Enter WiFi password
+const char* mqttServer = "68.183.247.103";
+const int mqttPort = 18000;
+const char* mqttUser = "interlace";
+const char* mqttPassword = "9895ad50-809a-4f9b-a516-967af1efbee4";
+/*const char* mqttServer = "159.65.152.75";
+const int mqttPort = 1883;
+const char* mqttUser = "6384037102";
+const char* mqttPassword = "katomaran2015$";*/
+WiFiClient espClient;
+PubSubClient client(espClient);
+//--------------------reset---------------------
+/*****************NTP conf****************/
+const long utcOffsetInSeconds = ((5 * 3600) + (0.5 * 3600) + (2 * 3600) + (0.5 * 3600));
+
+char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+
+// Define NTP Client to get time
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", utcOffsetInSeconds);
+long lastMsg = 0;
+char msg[50];
+int value = 0;
+int statusCode;
+String st;
+String content;
+bool chk_ref = false;
+unsigned int ref_data;
+//JSONVar data;
+ESP8266WebServer server(80);
+void setup_wifi() {
+
+  delay(10);
+  // We start by connecting to a WiFi network
+  Serial.println();
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    
+    delay(500);
+    Serial.print(".");
+  }
+
+  randomSeed(micros());
+
+  Serial.println("");
+  Serial.println("WiFi connected");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
+}
+
+void callback(char* topic, byte* payload, unsigned int length) 
+{
+  //Serial.print("Message arrived [");
+  //Serial.print(topic);
+  String Topic ="health_checkup";
+  String pre_topic = String(topic);
+  if(Topic == pre_topic)
+      {
+        if((char)payload[0] == '*')
+        {
+          Serial.println("<<<<<<<<<<pub>>>>>>>>>>>");
+                 client.publish("health_checkup", "c12y7");
+          }
+      }
+   // Serial.print((char)payload[i]);
+  }
+
+
+void reconnect() 
+{
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Create a random client ID
+    String clientId = "ESP8266Client-";
+    clientId += String(random(0xffff), HEX);
+    // Attempt to connect
+    if (client.connect(clientId.c_str())) {
+      Serial.println("connected");
+      // Once connected, publish an announcement...
+      client.publish("outTopic", "hello world");
+      // ... and resubscribe
+      client.subscribe("inTopic");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      if(WiFi.status() != WL_CONNECTED){
+                ESP.restart();
+                 delay(100);
+      }
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
+void setup() 
+{
+  pinMode(BUILTIN_LED, OUTPUT);     // Initialize the BUILTIN_LED pin as an output
+  Serial.begin(115200);
+  ss.begin(115200);
+  //setup_wifi();
+    timeClient.begin();
+  pinMode(13, OUTPUT); //siren pin
+  pinMode(pushbutton, INPUT_PULLUP);//#define Buttonlight 12
+  pinMode(Buttonlight, OUTPUT);
+  Serial.println("Disconnecting previously connected WiFi");
+    WiFi.disconnect();
+  EEPROM.begin(512); //Initialasing EEPROM
+  eeprom_chk();
+  client.setServer(mqttServer, mqttPort);
+  client.connect("ESP8266Client", mqttUser, mqttPassword );
+  client.setCallback(callback);
+  client.subscribe("health_checkup");
+  /*************refernce dist*************/
+  
+  //for make refernce
+  for (int i = 1; i <= 5; i++)
+  {
+    //   light_ind();
+    int chk_data = lidarRaw();
+    if (chk_data != 0)
+    {
+      ref_data += chk_data;
+    }
+    else
+    {
+      while (1)
+      {
+        Serial.println("check");
+        chk_data = lidarRaw();
+        if (chk_data != 0)
+        {
+          ref_data += chk_data;
+          break;
+        }
+        delay(10);
+      }
+    }
+  }
+  ref_data = ref_data / 5;
+  Serial.println(ref_data);
+}
+
+int lidarRaw(void)
+{
+  int dist; //actual distance measurements of LiDAR
+  int strength; //signal strength of LiDAR
+  float temprature;
+  int check; //save check value
+  int uart[9];
+  const int HEADER = 0x59;
+  while (true)
+  {
+    if (ss.available()) { //check if serial port has data input
+      if (ss.read() == HEADER) { //assess data package frame header 0x59
+        uart[0] = HEADER;
+        if (ss.read() == HEADER) { //assess data package frame header 0x59
+          uart[1] = HEADER;
+          for (int i = 2; i < 9; i++) { //save data in array
+            uart[i] = ss.read();
+          }
+          check = uart[0] + uart[1] + uart[2] + uart[3] + uart[4] + uart[5] + uart[6] + uart[7];
+          if (uart[8] == (check & 0xff)) { //verify the received data as per protocol
+            dist = uart[2] + uart[3] * 256; //calculate distance value
+            strength = uart[4] + uart[5] * 256; //calculate signal strength value
+            temprature = uart[6] + uart[7] * 256; //calculate chip temprature
+            temprature = temprature / 8 - 256;
+            //Serial.print("dist = ");
+            //Serial.print(dist);
+            if ((dist == 0) || (dist > 600))
+            {
+              dist = 600;
+            }
+            //Serial.print(" ,");
+            //Serial.println(dist);
+            break;
+          }
+        }
+      }
+    }
+    delay(5);
+  }
+  return dist;
+}
+int previous = 0;
+int obs_time;
+bool obs_flag = false;
+bool obs_first = false;
+int obs_dist ;
+bool siren_flag = false;
+void lidar_process(void)
+{
+      timeClient.update();
+    delay(10);
+    int current = lidarRaw();
+    Serial.println(current);
+    if (current < (ref_data - 15))
+    {
+      obs_flag = true;
+      if (obs_first == false)
+      {
+        //  Serial.println("<<<<<<<<<OBS_DETECTED FIRST>>>>>>>>");
+        obs_time = millis();
+        obs_first = true;
+      }
+      // Serial.println("<<<<<<<<<OBS_DETECTED>>>>>>>>");
+    }
+    else
+    {
+      obs_flag = false;
+      obs_first = false;
+      // Serial.println("<<<<<<<<<OBS_NOT DETECTED>>>>>>>>");
+    }
+    if ( (millis() - obs_time > 2000) && (obs_flag == true) && (obs_first == true))
+    {
+      Serial.println("SIREN ON");
+      char buf[60] = " ";
+      digitalWrite (13, HIGH);
+      //int dist_ob = lidarRaw();
+      //delayMicroseconds(5);
+      String time_upd = timeClient.getFormattedTime();
+      delayMicroseconds(5);
+      String output = "{\"detected_at\":" + String(current) + ",\"created_at\":" + "\"" + String(time_upd) + "\"" + "} ";
+      output.toCharArray(buf, (output.length() + 1));
+      client.publish("iot-devices/3m-sensor/01", buf);
+      delay(100);
+    }
+}
+void loop() 
+{
+ if (!client.connected() && WiFi.status() != WL_CONNECTED)
+  {
+    Serial.println("wifi disconnected");
+    ESP.restart();
+    delay(100);
+  }
+  if (!client.connected()) 
+  {
+    Serial.println("client disconnected");
+    reconnect();
+  }
+  if (client.connected() && WiFi.status() == WL_CONNECTED)
+  {
+     lidar_process();
+    if (digitalRead(pushbutton) == 0)
+    {
+      Serial.println("SIREN OFF");
+      digitalWrite (13, LOW);
+      obs_flag = false;
+      obs_first = false;
+    }
+  client.loop();
+
+  long now = millis();
+  if (now - lastMsg > 50000) {
+    lastMsg = now;
+    ++value;
+    //snprintf (msg, 50, "hello world #%ld", value);
+   // Serial.print("Publish message: ");
+    Serial.println(msg);
+    client.publish("health_checkup", "c12y7");
+  }
+}
+}
+bool testWifi(void)
+{
+  int c = 0;
+  Serial.println("Waiting for Wifi to connect");
+  while ( c < 20 ) {
+    if (WiFi.status() == WL_CONNECTED)
+    {
+      return true;
+    }
+    delay(500);
+    Serial.print("*");
+    c++;
+  }
+  Serial.println("");
+  Serial.println("Connect timed out, opening AP");
+  return false;
+} void launchWeb()
+{
+  Serial.println("");
+  if (WiFi.status() == WL_CONNECTED)
+    Serial.println("WiFi connected");
+  Serial.print("Local IP: ");
+  Serial.println(WiFi.localIP());
+  Serial.print("SoftAP IP: ");
+  Serial.println(WiFi.softAPIP());
+  createWebServer();
+  //Start the server
+  server.begin();
+  Serial.println("Server started");
+} void setupAP(void)
+{
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+  digitalWrite(14, HIGH);
+  int n = WiFi.scanNetworks();
+  Serial.println("scan done");
+  if (n == 0)
+    Serial.println("no networks found");
+  else
+  {
+    Serial.print(n);
+    Serial.println(" networks found");
+    for (int i = 0; i < n; ++i)
+    {
+      //Print SSID and RSSI for each network found
+      Serial.print(i + 1);
+      Serial.print(": ");
+      Serial.print(WiFi.SSID(i));
+      Serial.print(" (");
+      Serial.print(WiFi.RSSI(i));
+      Serial.print(")");
+      Serial.println((WiFi.encryptionType(i) == ENC_TYPE_NONE) ? " " : "*");
+      delay(10);
+    }
+  }
+  Serial.println("");
+  st = "<ol>";
+  for (int i = 0; i < n; ++i)
+  {
+    // Print SSID and RSSI for each network found
+    st += "<li>";
+    st += WiFi.SSID(i);
+    st += " (";
+    st += WiFi.RSSI(i);    st += ")";
+    st += (WiFi.encryptionType(i) == ENC_TYPE_NONE) ? " " : "*";
+    st += "</li>";
+  }
+  st += "</ol>";
+  delay(100);
+  WiFi.softAP("INTERLOCK_3M", "123456789");
+  Serial.println("softap");
+  launchWeb();
+  Serial.println("over");
+} void createWebServer()
+{
+  {
+    server.on("/", []() {
+      IPAddress ip = WiFi.softAPIP();
+      String ipStr = String(ip[0]) + '.' + String(ip[1]) + '.' + String(ip[2]) + '.' + String(ip[3]);
+      content = "<!DOCTYPE HTML>\r\n<html>Hello from SmartControl at ";
+      content += "<form action=\"/scan\" method=\"POST\"><input type=\"submit\" value=\"scan\"></form>";
+      content += ipStr;
+      content += "<p>";
+      content += st;
+      content += "</p><form method='get' action='setting'><label>SSID: </label><input name='ssid' length=32><input name='pass' length=64><input type='submit'></form>";
+      content += "</html>";
+      server.send(200, "text/html", content);
+    });
+    server.on("/scan", []() {
+      //setupAP();
+      IPAddress ip = WiFi.softAPIP();
+      String ipStr = String(ip[0]) + '.' + String(ip[1]) + '.' + String(ip[2]) + '.' + String(ip[3]);      content = "<!DOCTYPE HTML>\r\n<html>go back";
+      server.send(200, "text/html", content);
+    });    server.on("/setting", []() {
+      String qsid = server.arg("ssid");
+      String qpass = server.arg("pass");
+      if (qsid.length() > 0 && qpass.length() > 0) {
+        //Serial.println("clearing eeprom");
+        for (int i = 0; i < 96; ++i) {
+          EEPROM.write(i, 0);
+        }
+        //Serial.println(qsid);
+        //Serial.println("");
+        //Serial.println(qpass);
+        //Serial.println("");        // Serial.println("writing eeprom ssid:");
+        for (int i = 0; i < qsid.length(); ++i)
+        {
+          EEPROM.write(i, qsid[i]);
+          //Serial.print("Wrote: ");
+          //Serial.println(qsid[i]);
+        }
+        //Serial.println("writing eeprom pass:");
+        for (int i = 0; i < qpass.length(); ++i)
+        {
+          EEPROM.write(32 + i, qpass[i]);
+          //Serial.print("Wrote: ");
+          // Serial.println(qpass[i]);
+        }
+        EEPROM.commit();        content = "{\"Success\":\"saved to eeprom... reset to boot into new wifi\"}";
+        statusCode = 200;
+        ESP.reset();
+      } else {
+        content = "{\"Error\":\"404 not found\"}";
+        statusCode = 404;
+        //Serial.println("Sending 404");
+      }
+      server.sendHeader("Access-Control-Allow-Origin", "*");
+      server.send(statusCode, "application/json", content);
+    });
+  }
+}
+
+void eeprom_chk(void)
+{
+    Serial.println("Reading EEPROM ssid");  String esid;
+  for (int i = 0; i < 32; ++i)
+  {
+    esid += char(EEPROM.read(i));
+  }
+  Serial.println();
+  Serial.print("SSID: ");
+  Serial.println(esid);
+  Serial.println("Reading EEPROM pass");  String epass = "";
+  for (int i = 32; i < 96; ++i)
+  {
+    epass += char(EEPROM.read(i));
+  }
+  Serial.print("PASS: ");
+  Serial.println(epass);  WiFi.begin(esid.c_str(), epass.c_str());
+  if (testWifi())
+  {
+    Serial.println("Succesfully Connected!!!");    //  client.publish("chk/lidar2", "Let's Begin");
+    delay(100);
+    return;
+  }
+  else
+  {
+    // Serial.println("Turning the HotSpot On");
+    launchWeb();
+    setupAP();// Setup HotSpot
+    delay(100);
+  }  Serial.println();
+  Serial.println("Waiting.");  while ((WiFi.status() != WL_CONNECTED))
+  {
+    Serial.print(".");
+    delay(100);
+    server.handleClient();
+  }
+}
