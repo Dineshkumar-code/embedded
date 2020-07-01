@@ -116,6 +116,10 @@ void reconnect()
 {
   // Loop until we're reconnected
   while (!client.connected()) {
+      client.setServer(mqttServer, mqttPort);
+  client.connect("ESP8266Client", mqttUser, mqttPassword );
+  client.setCallback(callback);
+  client.subscribe("health_checkup");
     Serial.print("Attempting MQTT connection...");
     // Create a random client ID
     String clientId = "ESP8266Client-";
@@ -123,10 +127,6 @@ void reconnect()
     // Attempt to connect
     if (client.connect(clientId.c_str())) {
       Serial.println("connected");
-      // Once connected, publish an announcement...
-      client.publish("outTopic", "hello world");
-      // ... and resubscribe
-      client.subscribe("inTopic");
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
@@ -280,6 +280,7 @@ void loop()
   {
     Serial.println("wifi disconnected");
     ESP.restart();
+    digitalWrite(Buttonlight, LOW);
     delay(100);
   }
   if (!client.connected()) 
@@ -289,6 +290,8 @@ void loop()
   }
   if (client.connected() && WiFi.status() == WL_CONNECTED)
   {
+    digitalWrite(Buttonlight, HIGH);
+    delayMicroseconds(10);
      lidar_process();
     if (digitalRead(pushbutton) == 0)
     {
@@ -300,7 +303,7 @@ void loop()
   client.loop();
 
   long now = millis();
-  if (now - lastMsg > 50000) {
+  if (now - lastMsg > 20000) {
     lastMsg = now;
     ++value;
     //snprintf (msg, 50, "hello world #%ld", value);
